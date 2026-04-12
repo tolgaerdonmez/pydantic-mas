@@ -3,9 +3,11 @@ from enum import StrEnum
 from typing import Any, Callable
 
 from pydantic_ai import Agent, Tool
+from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.toolsets import FunctionToolset
+from pydantic_graph.nodes import End
 
 from pydantic_mas._budget import BudgetExceededError
 from pydantic_mas._formatter import default_message_formatter
@@ -35,12 +37,14 @@ class AgentNode[DepsT]:
         router: MessageRouter,
         deps: DepsT = None,
         message_formatter: Callable[[Message], str] | None = None,
+        interrupt_on_send: bool = False,
     ):
         self.agent_id = agent_id
         self.agent = agent
         self.router = router
         self.deps = deps
         self.message_formatter = message_formatter or default_message_formatter
+        self._interrupt_on_send = interrupt_on_send
 
         self.inbox: asyncio.Queue[Message] = asyncio.Queue()
         self.history: list[ModelMessage] = []
@@ -51,7 +55,6 @@ class AgentNode[DepsT]:
         self._idle_event: asyncio.Event = asyncio.Event()
         self._idle_event.set()
 
-        # Interrupt flag (used by sub-plan 06)
         self._interrupt_requested: bool = False
 
     @property
@@ -86,6 +89,8 @@ class AgentNode[DepsT]:
                     type=MessageType.REQUEST,
                     depth=node.current_depth + 1,
                 )
+                if node._interrupt_on_send:
+                    node._interrupt_requested = True
                 return f"Message sent to '{target_agent}' (id: {msg.id})"
             except (ValueError, BudgetExceededError) as e:
                 return f"Error: {e}"
@@ -122,7 +127,15 @@ class AgentNode[DepsT]:
     async def _process_message(self, message: Message) -> None:
         """Process a single incoming message."""
         formatted = self.message_formatter(message)
+        self._interrupt_requested = False
 
+        if self._interrupt_on_send:
+            await self._process_with_interrupt(formatted, message)
+        else:
+            await self._process_simple(formatted, message)
+
+    async def _process_simple(self, formatted: str, message: Message) -> None:
+        """Simple processing: run agent to completion."""
         result = await self.agent.run(
             user_prompt=formatted,
             message_history=self.history,
@@ -132,6 +145,48 @@ class AgentNode[DepsT]:
 
         self.history = list(result.all_messages())
         self._handle_last_output_reply(message, result)
+
+    async def _process_with_interrupt(
+        self, formatted: str, message: Message
+    ) -> None:
+        """Processing with interrupt-on-send: use Agent.iter() for turn control.
+
+        Agent.iter() yields nodes BEFORE they execute. When we see a
+        CallToolsNode, we call run.next(node) to execute it, THEN check the
+        interrupt flag. If set, we break before the next LLM turn.
+
+        After breaking, the tool return results live in next_node.request
+        (a ModelRequest) but haven't been appended to run.all_messages() yet.
+        We manually append them to preserve complete history.
+        """
+        interrupted = False
+
+        async with self.agent.iter(
+            user_prompt=formatted,
+            message_history=self.history,
+            deps=self.deps,
+            toolsets=[self._build_runtime_toolset()],
+        ) as run:
+            node = run.next_node
+            while not isinstance(node, End):
+                next_node = await run.next(node)
+
+                if isinstance(node, CallToolsNode) and self._interrupt_requested:
+                    # All tools in this turn have executed.
+                    # Capture messages including the pending tool returns.
+                    self.history = list(run.all_messages())
+                    if isinstance(next_node, ModelRequestNode):
+                        self.history.append(next_node.request)
+                    interrupted = True
+                    break
+
+                node = next_node
+
+            if not interrupted:
+                self.history = list(run.all_messages())
+
+        if not interrupted and run.result is not None:
+            self._handle_last_output_reply(message, run.result)
 
     def _handle_last_output_reply(
         self, original_message: Message, result: AgentRunResult[str]

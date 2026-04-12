@@ -67,6 +67,7 @@ class MAS:
                 router=router,
                 deps=config.resolve_deps(),
                 message_formatter=self.message_formatter,
+                interrupt_on_send=self.interrupt_on_send,
             )
             router.register(agent_id, node.inbox)
             agent_nodes.append(node)
