@@ -1,0 +1,157 @@
+import asyncio
+from enum import StrEnum
+from typing import Any, Callable
+
+from pydantic_ai import Agent, Tool
+from pydantic_ai.agent import AgentRunResult
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.toolsets import FunctionToolset
+
+from pydantic_mas._budget import BudgetExceededError
+from pydantic_mas._formatter import default_message_formatter
+from pydantic_mas._message import Message, MessageType
+from pydantic_mas._router import MessageRouter
+
+
+class AgentState(StrEnum):
+    IDLE = "idle"
+    PROCESSING = "processing"
+
+
+class AgentNode[DepsT]:
+    """Runtime wrapper around a single pydantic-ai Agent.
+
+    Each node is an independent actor with its own inbox, processing loop,
+    conversation history, and state tracking.
+
+    Type parameter DepsT matches the agent's deps_type so that deps are
+    passed through to pydantic-ai with the correct type.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        agent: Agent[DepsT],
+        router: MessageRouter,
+        deps: DepsT = None,
+        message_formatter: Callable[[Message], str] | None = None,
+    ):
+        self.agent_id = agent_id
+        self.agent = agent
+        self.router = router
+        self.deps = deps
+        self.message_formatter = message_formatter or default_message_formatter
+
+        self.inbox: asyncio.Queue[Message] = asyncio.Queue()
+        self.history: list[ModelMessage] = []
+        self.state: AgentState = AgentState.IDLE
+        self.current_depth: int = 0
+        self.current_message: Message | None = None
+
+        self._idle_event: asyncio.Event = asyncio.Event()
+        self._idle_event.set()
+
+        # Interrupt flag (used by sub-plan 06)
+        self._interrupt_requested: bool = False
+
+    @property
+    def idle_event(self) -> asyncio.Event:
+        return self._idle_event
+
+    def _make_send_message_tool(self) -> Tool[Any]:
+        """Create the send_message tool closure.
+
+        WARNING: This tool MUST remain sequential=True. It calls router.route()
+        which mutates shared state (budget counters, message log) via a synchronous
+        check-then-act pattern. If pydantic-ai executed multiple send_message calls
+        concurrently (its default for tool batches), interleaving at any await point
+        could cause race conditions. sequential=True forces pydantic-ai to execute
+        tool batches one at a time when this tool is in the batch.
+        """
+        node = self
+        router = self.router
+
+        async def send_message(target_agent: str, content: str) -> str:
+            """Send a message to another agent in the system.
+
+            Args:
+                target_agent: The ID of the agent to send the message to.
+                content: The message content to send.
+            """
+            try:
+                msg = router.route(
+                    sender=node.agent_id,
+                    receiver=target_agent,
+                    content=content,
+                    type=MessageType.REQUEST,
+                    depth=node.current_depth + 1,
+                )
+                return f"Message sent to '{target_agent}' (id: {msg.id})"
+            except (ValueError, BudgetExceededError) as e:
+                return f"Error: {e}"
+
+        return Tool(send_message, sequential=True)
+
+    def _build_runtime_toolset(self) -> FunctionToolset[DepsT]:
+        """Build the toolset of framework-injected tools.
+
+        This is passed via agent.run(toolsets=[...]) which ADDS to the agent's
+        existing tools rather than replacing them. Do NOT use agent.override(tools=[...])
+        as that REPLACES all tools the developer registered on the agent.
+        """
+        return FunctionToolset[DepsT]([self._make_send_message_tool()])
+
+    async def run_loop(self) -> None:
+        """Main processing loop. Runs until cancelled."""
+        try:
+            while True:
+                self.state = AgentState.IDLE
+                self._idle_event.set()
+
+                message = await self.inbox.get()
+
+                self.state = AgentState.PROCESSING
+                self._idle_event.clear()
+                self.current_message = message
+                self.current_depth = message.depth
+
+                await self._process_message(message)
+        except asyncio.CancelledError:
+            pass
+
+    async def _process_message(self, message: Message) -> None:
+        """Process a single incoming message."""
+        formatted = self.message_formatter(message)
+
+        result = await self.agent.run(
+            user_prompt=formatted,
+            message_history=self.history,
+            deps=self.deps,
+            toolsets=[self._build_runtime_toolset()],
+        )
+
+        self.history = list(result.all_messages())
+        self._handle_last_output_reply(message, result)
+
+    def _handle_last_output_reply(
+        self, original_message: Message, result: AgentRunResult[str]
+    ) -> None:
+        """last_output strategy: auto-reply with the agent's text output."""
+        if original_message.type != MessageType.REQUEST:
+            return
+        if original_message.sender == "system":
+            return
+
+        output_text = result.output
+        if isinstance(output_text, str) and output_text.strip():
+            try:
+                self.router.route(
+                    sender=self.agent_id,
+                    receiver=original_message.sender,
+                    content=output_text,
+                    type=MessageType.REPLY,
+                    in_reply_to=original_message.id,
+                    depth=original_message.depth,
+                )
+            except Exception:
+                pass  # budget exceeded during reply — silently drop
