@@ -4,6 +4,7 @@ from pydantic_mas._agent_node import AgentNode
 from pydantic_mas._budget import Budget, BudgetTracker
 from pydantic_mas._config import AgentConfig, ReplyStrategy
 from pydantic_mas._formatter import default_message_formatter
+from pydantic_mas._hooks import MASHooks
 from pydantic_mas._instance import MASInstance
 from pydantic_mas._message import Message
 from pydantic_mas._result import MASResult
@@ -23,6 +24,7 @@ class MAS:
         interrupt_on_send: bool = False,
         budget: Budget | None = None,
         message_formatter: Callable[[Message], str] | None = None,
+        hooks: MASHooks | None = None,
     ):
         self.agents = agents
         self.reply_strategy = (
@@ -33,6 +35,7 @@ class MAS:
         self.interrupt_on_send = interrupt_on_send
         self.budget = budget or Budget()
         self.message_formatter = message_formatter or default_message_formatter
+        self.hooks = hooks
 
     async def run(
         self,
@@ -68,6 +71,7 @@ class MAS:
                 deps=config.resolve_deps(),
                 message_formatter=self.message_formatter,
                 interrupt_on_send=self.interrupt_on_send,
+                hooks=self.hooks,
             )
             router.register(agent_id, node.inbox)
             agent_nodes.append(node)

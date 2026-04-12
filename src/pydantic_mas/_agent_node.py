@@ -11,6 +11,7 @@ from pydantic_graph.nodes import End
 
 from pydantic_mas._budget import BudgetExceededError
 from pydantic_mas._formatter import default_message_formatter
+from pydantic_mas._hooks import MASHooks, SendMessageHookContext
 from pydantic_mas._message import Message, MessageType
 from pydantic_mas._router import MessageRouter
 
@@ -38,6 +39,7 @@ class AgentNode[DepsT]:
         deps: DepsT = None,
         message_formatter: Callable[[Message], str] | None = None,
         interrupt_on_send: bool = False,
+        hooks: MASHooks | None = None,
     ):
         self.agent_id = agent_id
         self.agent = agent
@@ -45,6 +47,7 @@ class AgentNode[DepsT]:
         self.deps = deps
         self.message_formatter = message_formatter or default_message_formatter
         self._interrupt_on_send = interrupt_on_send
+        self._hooks = hooks
 
         self.inbox: asyncio.Queue[Message] = asyncio.Queue()
         self.history: list[ModelMessage] = []
@@ -73,6 +76,7 @@ class AgentNode[DepsT]:
         """
         node = self
         router = self.router
+        hooks = self._hooks
 
         async def send_message(target_agent: str, content: str) -> str:
             """Send a message to another agent in the system.
@@ -82,16 +86,35 @@ class AgentNode[DepsT]:
                 content: The message content to send.
             """
             try:
-                msg = router.route(
-                    sender=node.agent_id,
-                    receiver=target_agent,
+                assert node.current_message is not None
+                context = SendMessageHookContext(
+                    sender_id=node.agent_id,
+                    receiver_id=target_agent,
                     content=content,
-                    type=MessageType.REQUEST,
+                    current_message=node.current_message,
                     depth=node.current_depth + 1,
                 )
+
+                if hooks and hooks.before_send_message:
+                    result = await hooks.before_send_message(context)
+                    if result is None:
+                        return "Message blocked by hook."
+                    context = result
+
+                msg = router.route(
+                    sender=context.sender_id,
+                    receiver=context.receiver_id,
+                    content=context.content,
+                    type=MessageType.REQUEST,
+                    depth=context.depth,
+                )
+
+                if hooks and hooks.after_send_message:
+                    await hooks.after_send_message(context, msg)
+
                 if node._interrupt_on_send:
                     node._interrupt_requested = True
-                return f"Message sent to '{target_agent}' (id: {msg.id})"
+                return f"Message sent to '{context.receiver_id}' (id: {msg.id})"
             except (ValueError, BudgetExceededError) as e:
                 return f"Error: {e}"
 

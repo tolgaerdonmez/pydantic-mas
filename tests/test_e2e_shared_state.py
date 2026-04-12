@@ -11,9 +11,7 @@ import json
 from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.models.test import TestModel
 
-from pydantic_mas._budget import Budget
 from pydantic_mas._config import AgentConfig
 from pydantic_mas._mas import MAS
 from pydantic_mas._result import TerminationReason

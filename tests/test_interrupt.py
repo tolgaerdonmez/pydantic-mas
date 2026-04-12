@@ -8,7 +8,6 @@ turns after delegating work.
 
 import json
 
-import pytest
 from pydantic_ai import Agent, Tool
 from pydantic_ai.messages import (
     ModelMessage,
@@ -21,10 +20,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from pydantic_mas._agent_node import AgentNode, AgentState
+from pydantic_mas._agent_node import AgentNode
 from pydantic_mas._budget import Budget, BudgetTracker
 from pydantic_mas._config import AgentConfig
-from pydantic_mas._formatter import default_message_formatter
 from pydantic_mas._mas import MAS
 from pydantic_mas._message import Message, MessageType
 from pydantic_mas._result import TerminationReason

@@ -3,7 +3,6 @@
 import asyncio
 import json
 
-import pytest
 from pydantic_ai import Agent, Tool
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel

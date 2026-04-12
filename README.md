@@ -143,6 +143,38 @@ mas = MAS(
 )
 ```
 
+### Communication Hooks
+
+Intercept `send_message` calls with before/after hooks for logging, access control, content filtering, or message transformation.
+
+```python
+from pydantic_mas import MASHooks, SendMessageHookContext, Message
+
+# Log all inter-agent communication
+async def log_messages(ctx: SendMessageHookContext, msg: Message) -> None:
+    print(f"{ctx.sender_id} -> {ctx.receiver_id}: {ctx.content[:80]}")
+
+# Block unauthorized communication
+async def access_control(ctx: SendMessageHookContext) -> SendMessageHookContext | None:
+    allowed = {"researcher": ["writer"], "writer": ["researcher"]}
+    if ctx.receiver_id not in allowed.get(ctx.sender_id, []):
+        return None  # block the message
+    return ctx
+
+# Modify outgoing content
+async def add_metadata(ctx: SendMessageHookContext) -> SendMessageHookContext:
+    ctx.content = f"[priority: high] {ctx.content}"
+    return ctx
+
+mas = MAS(
+    agents={...},
+    hooks=MASHooks(
+        before_send_message=access_control,  # can modify or block (return None)
+        after_send_message=log_messages,     # observe only (message already delivered)
+    ),
+)
+```
+
 ### Custom Message Formatter
 
 Control how incoming messages are presented to the LLM:
@@ -169,8 +201,9 @@ graph TD
     Instance --> NodeB["AgentNode B"]
     Instance --> NodeN["AgentNode ..."]
 
-    NodeA -->|"send_message()"| Router
-    NodeB -->|"send_message()"| Router
+    NodeA -->|"send_message()"| Hooks["MASHooks (before/after)"]
+    NodeB -->|"send_message()"| Hooks
+    Hooks -->|"route()"| Router
     Router -->|"put_nowait()"| InboxA["inbox A (asyncio.Queue)"]
     Router -->|"put_nowait()"| InboxB["inbox B (asyncio.Queue)"]
 

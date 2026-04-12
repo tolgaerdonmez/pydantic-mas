@@ -12,7 +12,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_mas._budget import Budget
 from pydantic_mas._config import AgentConfig, ReplyStrategy
 from pydantic_mas._mas import MAS
-from pydantic_mas._message import Message, MessageType
+from pydantic_mas._message import Message
 from pydantic_mas._result import TerminationReason
 
 
