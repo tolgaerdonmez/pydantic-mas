@@ -64,6 +64,8 @@ class MAS:
 
         agent_nodes: list[AgentNode] = []
         for agent_id, config in self.agents.items():
+            if config.agent.name is None:
+                config.agent._name = agent_id
             node = AgentNode(
                 agent_id=agent_id,
                 agent=config.agent,

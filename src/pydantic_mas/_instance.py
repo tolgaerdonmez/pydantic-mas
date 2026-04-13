@@ -1,10 +1,14 @@
 import asyncio
 
+from opentelemetry.trace import get_tracer_provider, use_span
+
 from pydantic_mas._agent_node import AgentNode, AgentState
 from pydantic_mas._budget import BudgetExceededError, BudgetTracker
 from pydantic_mas._message import MessageType
 from pydantic_mas._result import MASResult, TerminationReason
 from pydantic_mas._router import MessageRouter
+
+_tracer = get_tracer_provider().get_tracer("pydantic-mas")
 
 
 class MASInstance:
@@ -47,40 +51,56 @@ class MASInstance:
                 f"Available agents: {list(self._agent_nodes.keys())}"
             )
 
-        termination_reason = TerminationReason.COMPLETED
+        span = _tracer.start_span(
+            "MAS run",
+            attributes={
+                "mas.entry_agent": entry_agent,
+                "mas.agent_count": len(self._agent_nodes),
+            },
+        )
 
-        try:
-            self._router.route(
-                sender="system",
-                receiver=entry_agent,
-                content=prompt,
-                type=MessageType.REQUEST,
-                depth=0,
+        with use_span(span, end_on_exit=True, record_exception=True):
+            termination_reason = TerminationReason.COMPLETED
+
+            try:
+                self._router.route(
+                    sender="system",
+                    receiver=entry_agent,
+                    content=prompt,
+                    type=MessageType.REQUEST,
+                    depth=0,
+                )
+
+                effective_timeout = timeout or self._budget_tracker.budget.timeout_seconds
+                if effective_timeout:
+                    async with asyncio.timeout(effective_timeout):
+                        await self._run_agents()
+                else:
+                    await self._run_agents()
+
+            except TimeoutError:
+                termination_reason = TerminationReason.TIMEOUT
+            except BudgetExceededError:
+                termination_reason = TerminationReason.BUDGET_EXCEEDED
+            finally:
+                await self._cancel_all_agents()
+
+            span.set_attribute(
+                "mas.termination_reason", str(termination_reason)
+            )
+            span.set_attribute(
+                "mas.message_count", len(self._router.message_log)
             )
 
-            effective_timeout = timeout or self._budget_tracker.budget.timeout_seconds
-            if effective_timeout:
-                async with asyncio.timeout(effective_timeout):
-                    await self._run_agents()
-            else:
-                await self._run_agents()
-
-        except TimeoutError:
-            termination_reason = TerminationReason.TIMEOUT
-        except BudgetExceededError:
-            termination_reason = TerminationReason.BUDGET_EXCEEDED
-        finally:
-            await self._cancel_all_agents()
-
-        return MASResult(
-            message_log=self._router.message_log,
-            agent_histories={
-                agent_id: list(node.history)
-                for agent_id, node in self._agent_nodes.items()
-            },
-            termination_reason=termination_reason,
-            budget_usage=self._budget_tracker.snapshot(),
-        )
+            return MASResult(
+                message_log=self._router.message_log,
+                agent_histories={
+                    agent_id: list(node.history)
+                    for agent_id, node in self._agent_nodes.items()
+                },
+                termination_reason=termination_reason,
+                budget_usage=self._budget_tracker.snapshot(),
+            )
 
     async def _run_agents(self) -> None:
         """Start all agent loops and wait for termination."""
