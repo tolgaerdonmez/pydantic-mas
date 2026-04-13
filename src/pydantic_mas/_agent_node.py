@@ -146,6 +146,9 @@ class AgentNode[DepsT]:
                 await self._process_message(message)
         except asyncio.CancelledError:
             pass
+        finally:
+            self.state = AgentState.IDLE
+            self._idle_event.set()
 
     async def _process_message(self, message: Message) -> None:
         """Process a single incoming message."""

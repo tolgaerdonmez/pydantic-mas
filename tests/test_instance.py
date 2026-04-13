@@ -170,6 +170,31 @@ class TestMASInstanceTermination:
 
         assert result.termination_reason == TerminationReason.BUDGET_EXCEEDED
 
+    async def test_agent_crash_terminates_without_hanging(self):
+        """MAS terminates COMPLETED (not TIMEOUT) when an agent crashes mid-processing.
+
+        Regression test: if run_loop doesn't re-set _idle_event on crash,
+        _monitor_termination hangs forever on the dead agent's idle_event.
+        """
+
+        def crashing_handler(
+            messages: list[ModelMessage], info: AgentInfo
+        ) -> ModelResponse:
+            raise RuntimeError("Simulated LLM API failure")
+
+        agents = {
+            "agent_a": Agent(model=FunctionModel(crashing_handler)),
+            "agent_b": Agent(model=TestModel()),
+        }
+        instance = _make_instance(agents)
+
+        # timeout=2 is a safety net to prevent infinite hang. With the bug,
+        # the monitor waits on the dead agent's idle_event until timeout fires.
+        result = await instance.run(entry_agent="agent_a", prompt="go", timeout=2)
+
+        # With the fix, MAS detects quiescence immediately → COMPLETED, not TIMEOUT.
+        assert result.termination_reason == TerminationReason.COMPLETED
+
 
 class TestMASInstanceResult:
     async def test_result_message_log(self):

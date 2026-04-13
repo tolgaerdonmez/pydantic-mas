@@ -161,7 +161,7 @@ class TestSpanAttributes:
             return "never"  # pragma: no cover
 
         agent = Agent(
-            TestModel(call_tools=["block"]),
+            TestModel(call_tools=["block_forever"]),
             tools=[block_forever],
         )
         mas = MAS(
