@@ -12,3 +12,6 @@ wheels/
 
 # Experiments
 experiments/
+
+# Plans
+.plans/
