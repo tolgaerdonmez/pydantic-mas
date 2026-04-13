@@ -38,9 +38,7 @@ class TestAgentConfig:
             call_count += 1
             return f"deps-{call_count}"
 
-        config = AgentConfig(
-            agent=Agent(model=TestModel()), deps_factory=factory
-        )
+        config = AgentConfig(agent=Agent(model=TestModel()), deps_factory=factory)
 
         assert config.resolve_deps() == "deps-1"
         assert config.resolve_deps() == "deps-2"
@@ -82,9 +80,7 @@ def _model_that_sends(target: str, content: str) -> FunctionModel:
                 parts=[
                     ToolCallPart(
                         tool_name="send_message",
-                        args=json.dumps(
-                            {"target_agent": target, "content": content}
-                        ),
+                        args=json.dumps({"target_agent": target, "content": content}),
                         tool_call_id="call-1",
                     )
                 ]
@@ -114,9 +110,7 @@ class TestMASValidation:
 
 class TestMASRun:
     async def test_single_agent_completes(self):
-        mas = MAS(
-            agents={"agent_a": AgentConfig(agent=Agent(model=TestModel()))}
-        )
+        mas = MAS(agents={"agent_a": AgentConfig(agent=Agent(model=TestModel()))})
 
         result = await mas.run(entry_agent="agent_a", prompt="hello")
 
@@ -221,9 +215,7 @@ class TestMASDeps:
         agent: Agent[str] = Agent(model=TestModel(call_tools=["capture_tool"]))
         agent.tool(capture_tool)
 
-        mas = MAS(
-            agents={"agent_a": AgentConfig(agent=agent, deps="my-deps")}
-        )
+        mas = MAS(agents={"agent_a": AgentConfig(agent=agent, deps="my-deps")})
 
         await mas.run(entry_agent="agent_a", prompt="go")
 
@@ -264,4 +256,6 @@ class TestMASIsolation:
         assert result1.message_log[0].content == "first"
         assert result2.message_log[0].content == "second"
         # Budget counters are independent, not cumulative
-        assert result1.budget_usage.total_messages == result2.budget_usage.total_messages
+        assert (
+            result1.budget_usage.total_messages == result2.budget_usage.total_messages
+        )

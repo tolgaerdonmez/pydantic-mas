@@ -85,9 +85,7 @@ def _coordinator_model(targets: list[str]) -> FunctionModel:
         parts = [
             ToolCallPart(
                 tool_name="send_message",
-                args=json.dumps(
-                    {"target_agent": t, "content": f"Task for {t}"}
-                ),
+                args=json.dumps({"target_agent": t, "content": f"Task for {t}"}),
                 tool_call_id=f"to-{t}",
             )
             for t in targets
@@ -218,18 +216,14 @@ class TestSharedReportAssembly:
         mas = MAS(
             agents={
                 "coordinator": AgentConfig(
-                    agent=Agent(
-                        model=_coordinator_model(["researcher", "writer"])
-                    )
+                    agent=Agent(model=_coordinator_model(["researcher", "writer"]))
                 ),
                 "researcher": AgentConfig(agent=researcher_agent),
                 "writer": AgentConfig(agent=writer_agent),
             }
         )
 
-        result = await mas.run(
-            entry_agent="coordinator", prompt="Build a report on X"
-        )
+        result = await mas.run(entry_agent="coordinator", prompt="Build a report on X")
 
         assert result.termination_reason == TerminationReason.COMPLETED
         assert len(report.sections) == 2
@@ -244,9 +238,7 @@ class TestSharedReportAssembly:
         mas = MAS(
             agents={
                 "coordinator": AgentConfig(
-                    agent=Agent(
-                        model=_coordinator_model(["researcher", "writer"])
-                    )
+                    agent=Agent(model=_coordinator_model(["researcher", "writer"]))
                 ),
                 "researcher": AgentConfig(
                     agent=Agent(

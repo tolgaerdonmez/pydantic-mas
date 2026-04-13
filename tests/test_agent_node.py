@@ -150,9 +150,7 @@ def _model_that_calls_tool(tool_name: str, args: dict) -> FunctionModel:
     return FunctionModel(handler)
 
 
-def _model_that_calls_send_message(
-    target: str, content: str
-) -> FunctionModel:
+def _model_that_calls_send_message(target: str, content: str) -> FunctionModel:
     """Create a FunctionModel that calls send_message then returns text."""
 
     def handler(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -168,9 +166,7 @@ def _model_that_calls_send_message(
             parts=[
                 ToolCallPart(
                     tool_name="send_message",
-                    args=json.dumps(
-                        {"target_agent": target, "content": content}
-                    ),
+                    args=json.dumps({"target_agent": target, "content": content}),
                     tool_call_id="call-1",
                 )
             ]
@@ -252,9 +248,7 @@ class TestAgentNodeLastOutputReply:
         router.register("agent_b", inbox_b)
 
         # Message from agent_b (not system) — should trigger auto-reply
-        msg = _make_message(
-            sender="agent_b", receiver="agent_a", content="Help me"
-        )
+        msg = _make_message(sender="agent_b", receiver="agent_a", content="Help me")
         node_a.inbox.put_nowait(msg)
 
         task = asyncio.create_task(node_a.run_loop())
@@ -687,9 +681,7 @@ class TestAgentNodeFanOut:
         # Plus auto-replies from last_output strategy (B replies to A, C replies to A and B)
 
         # At minimum, the 3 explicit sends should be in the log
-        senders_receivers = [
-            (m.sender, m.receiver) for m in router.message_log
-        ]
+        senders_receivers = [(m.sender, m.receiver) for m in router.message_log]
         assert ("agent_a", "agent_b") in senders_receivers
         assert ("agent_a", "agent_c") in senders_receivers
         assert ("agent_b", "agent_c") in senders_receivers

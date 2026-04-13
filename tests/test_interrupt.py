@@ -93,9 +93,7 @@ def _two_tool_model() -> FunctionModel:
             )
 
         if isinstance(last_part, ToolReturnPart):
-            return ModelResponse(
-                parts=[TextPart(content="All done — second LLM turn")]
-            )
+            return ModelResponse(parts=[TextPart(content="All done — second LLM turn")])
 
         return ModelResponse(parts=[TextPart(content="fallback")])
 
@@ -113,9 +111,7 @@ def _send_only_model(target: str = "agent_b", content: str = "hello") -> Functio
                 parts=[
                     ToolCallPart(
                         tool_name="send_message",
-                        args=json.dumps(
-                            {"target_agent": target, "content": content}
-                        ),
+                        args=json.dumps({"target_agent": target, "content": content}),
                         tool_call_id="send-1",
                     )
                 ]
@@ -235,9 +231,7 @@ class TestInterruptStopsProcessing:
             lookup_called = True
             return f"data:{key}=value"
 
-        agent = Agent(
-            model=FunctionModel(counting_handler), tools=[Tool(lookup)]
-        )
+        agent = Agent(model=FunctionModel(counting_handler), tools=[Tool(lookup)])
         node, router, _ = _make_node_with_interrupt(agent=agent)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
@@ -295,9 +289,7 @@ class TestNoAutoReplyOnInterrupt:
         router.register("other_agent", inbox_sender)
 
         # Message from another agent (not system) — would normally trigger auto-reply
-        msg = _make_message(
-            sender="other_agent", receiver="agent_a", content="help me"
-        )
+        msg = _make_message(sender="other_agent", receiver="agent_a", content="help me")
         node.inbox.put_nowait(msg)
 
         task = asyncio.create_task(node.run_loop())
@@ -340,16 +332,12 @@ class TestHistoryPreservedAfterInterrupt:
 
         # Message 0: user prompt
         assert node.history[0].kind == "request"
-        user_parts = [
-            p for p in node.history[0].parts if isinstance(p, UserPromptPart)
-        ]
+        user_parts = [p for p in node.history[0].parts if isinstance(p, UserPromptPart)]
         assert len(user_parts) >= 1
 
         # Message 1: model response with tool call
         assert node.history[1].kind == "response"
-        tool_calls = [
-            p for p in node.history[1].parts if isinstance(p, ToolCallPart)
-        ]
+        tool_calls = [p for p in node.history[1].parts if isinstance(p, ToolCallPart)]
         assert len(tool_calls) >= 1
         assert any(tc.tool_name == "send_message" for tc in tool_calls)
 
@@ -467,13 +455,9 @@ class TestMASInterruptOnSend:
     async def test_e2e_interrupt_completes(self):
         """MAS with interrupt_on_send=True runs to completion."""
 
-        def handler(
-            messages: list[ModelMessage], info: AgentInfo
-        ) -> ModelResponse:
+        def handler(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             last_part = messages[-1].parts[-1]
-            if isinstance(last_part, UserPromptPart) and "start" in str(
-                last_part
-            ):
+            if isinstance(last_part, UserPromptPart) and "start" in str(last_part):
                 return ModelResponse(
                     parts=[
                         ToolCallPart(
@@ -516,17 +500,13 @@ class TestMASInterruptOnSend:
         """
         llm_a_calls = 0
 
-        def handler_a(
-            messages: list[ModelMessage], info: AgentInfo
-        ) -> ModelResponse:
+        def handler_a(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             nonlocal llm_a_calls
             llm_a_calls += 1
 
             # Only send on the very first LLM call (no tool interactions yet)
             has_prior_tools = any(
-                hasattr(p, "tool_name")
-                for msg in messages
-                for p in msg.parts
+                hasattr(p, "tool_name") for msg in messages for p in msg.parts
             )
             last_part = messages[-1].parts[-1]
 
@@ -549,9 +529,7 @@ class TestMASInterruptOnSend:
 
         mas = MAS(
             agents={
-                "agent_a": AgentConfig(
-                    agent=Agent(model=FunctionModel(handler_a))
-                ),
+                "agent_a": AgentConfig(agent=Agent(model=FunctionModel(handler_a))),
                 "agent_b": AgentConfig(agent=Agent(model=TestModel())),
             },
             interrupt_on_send=True,

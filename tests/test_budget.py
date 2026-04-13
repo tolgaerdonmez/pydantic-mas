@@ -55,9 +55,7 @@ class TestBudgetSnapshot:
         assert snap.max_depth_seen == 2
 
     def test_frozen(self):
-        snap = BudgetSnapshot(
-            total_messages=0, per_agent_messages={}, max_depth_seen=0
-        )
+        snap = BudgetSnapshot(total_messages=0, per_agent_messages={}, max_depth_seen=0)
         with pytest.raises(Exception):
             snap.total_messages = 1
 

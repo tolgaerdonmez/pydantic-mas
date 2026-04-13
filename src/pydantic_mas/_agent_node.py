@@ -169,9 +169,7 @@ class AgentNode[DepsT]:
         self.history = list(result.all_messages())
         self._handle_last_output_reply(message, result)
 
-    async def _process_with_interrupt(
-        self, formatted: str, message: Message
-    ) -> None:
+    async def _process_with_interrupt(self, formatted: str, message: Message) -> None:
         """Processing with interrupt-on-send: use Agent.iter() for turn control.
 
         Agent.iter() yields nodes BEFORE they execute. When we see a

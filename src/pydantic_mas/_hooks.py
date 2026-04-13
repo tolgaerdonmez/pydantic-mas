@@ -33,9 +33,7 @@ BeforeSendHook = Callable[
     [SendMessageHookContext], Awaitable[SendMessageHookContext | None]
 ]
 AfterSendHook = Callable[[SendMessageHookContext, Message], Awaitable[None]]
-BeforeAnswerHook = Callable[
-    [AnswerHookContext], Awaitable[AnswerHookContext | None]
-]
+BeforeAnswerHook = Callable[[AnswerHookContext], Awaitable[AnswerHookContext | None]]
 AfterAnswerHook = Callable[[AnswerHookContext, Message], Awaitable[None]]
 
 

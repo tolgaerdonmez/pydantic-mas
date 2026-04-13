@@ -53,9 +53,7 @@ def _model_that_sends(target: str, content: str) -> FunctionModel:
                 parts=[
                     ToolCallPart(
                         tool_name="send_message",
-                        args=json.dumps(
-                            {"target_agent": target, "content": content}
-                        ),
+                        args=json.dumps({"target_agent": target, "content": content}),
                         tool_call_id="call-1",
                     )
                 ]
@@ -103,9 +101,7 @@ class TestMASInstanceTermination:
         assert result.termination_reason == TerminationReason.COMPLETED
 
         # Message flow: system->A, A->B (send_message), B->A (auto-reply)
-        senders_receivers = [
-            (m.sender, m.receiver) for m in result.message_log
-        ]
+        senders_receivers = [(m.sender, m.receiver) for m in result.message_log]
         assert ("system", "agent_a") in senders_receivers
         assert ("agent_a", "agent_b") in senders_receivers
         assert ("agent_b", "agent_a") in senders_receivers
@@ -262,9 +258,7 @@ class TestMASInstanceResult:
 
         assert result.termination_reason == TerminationReason.COMPLETED
 
-        senders_receivers = [
-            (m.sender, m.receiver) for m in result.message_log
-        ]
+        senders_receivers = [(m.sender, m.receiver) for m in result.message_log]
         assert ("system", "agent_a") in senders_receivers
         assert ("agent_a", "agent_b") in senders_receivers
         assert ("agent_b", "agent_c") in senders_receivers

@@ -21,9 +21,7 @@ class BudgetExceededError(Exception):
         self.metric = metric
         self.current = current
         self.limit = limit
-        super().__init__(
-            f"Budget exceeded: {metric} = {current}, limit = {limit}"
-        )
+        super().__init__(f"Budget exceeded: {metric} = {current}, limit = {limit}")
 
 
 class BudgetSnapshot(BaseModel, frozen=True):
@@ -69,9 +67,7 @@ class BudgetTracker:
             )
 
         if self.budget.max_depth is not None and depth > self.budget.max_depth:
-            raise BudgetExceededError(
-                "depth", depth, self.budget.max_depth
-            )
+            raise BudgetExceededError("depth", depth, self.budget.max_depth)
 
         self.total_messages += 1
         self.per_agent_messages[sender] = agent_count + 1

@@ -28,9 +28,7 @@ def _model_that_sends(target: str, content: str) -> FunctionModel:
                 parts=[
                     ToolCallPart(
                         tool_name="send_message",
-                        args=json.dumps(
-                            {"target_agent": target, "content": content}
-                        ),
+                        args=json.dumps({"target_agent": target, "content": content}),
                         tool_call_id="call-1",
                     )
                 ]
@@ -45,7 +43,9 @@ class TestMASParentSpan:
 
     async def test_mas_run_creates_parent_span(self):
         mas = MAS(
-            agents={"alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))},
+            agents={
+                "alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))
+            },
             budget=Budget(max_total_messages=5, timeout_seconds=5),
         )
         with context_subtree() as tree:
@@ -71,7 +71,9 @@ class TestMASParentSpan:
 
     async def test_agent_runs_nested_under_parent(self):
         mas = MAS(
-            agents={"alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))},
+            agents={
+                "alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))
+            },
             budget=Budget(max_total_messages=5, timeout_seconds=5),
         )
         with context_subtree() as tree:
@@ -83,7 +85,11 @@ class TestMASParentSpan:
 
     async def test_agent_names_in_spans(self):
         mas = MAS(
-            agents={"coordinator": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))},
+            agents={
+                "coordinator": AgentConfig(
+                    agent=Agent(TestModel(custom_output_text="ok"))
+                )
+            },
             budget=Budget(max_total_messages=5, timeout_seconds=5),
         )
         with context_subtree() as tree:
@@ -98,7 +104,9 @@ class TestMASParentSpan:
         mas = MAS(
             agents={
                 "sender": AgentConfig(agent=Agent(_model_that_sends("receiver", "hi"))),
-                "receiver": AgentConfig(agent=Agent(TestModel(custom_output_text="got it"))),
+                "receiver": AgentConfig(
+                    agent=Agent(TestModel(custom_output_text="got it"))
+                ),
             },
             budget=Budget(max_total_messages=10, timeout_seconds=5),
         )
@@ -106,7 +114,9 @@ class TestMASParentSpan:
             await mas.run("sender", "start")
 
         root = next(s for s in tree.roots if s.name == "MAS run")
-        agent_names = {c.attributes["agent_name"] for c in root.children if c.name == "agent run"}
+        agent_names = {
+            c.attributes["agent_name"] for c in root.children if c.name == "agent run"
+        }
         assert "sender" in agent_names
         assert "receiver" in agent_names
 
@@ -116,7 +126,9 @@ class TestSpanAttributes:
 
     async def test_span_records_completed(self):
         mas = MAS(
-            agents={"alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))},
+            agents={
+                "alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))
+            },
             budget=Budget(max_total_messages=5, timeout_seconds=5),
         )
         with context_subtree() as tree:
@@ -129,7 +141,9 @@ class TestSpanAttributes:
     async def test_span_records_budget_exceeded(self):
         """Budget exceeded on initial message sets termination_reason on span."""
         mas = MAS(
-            agents={"alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))},
+            agents={
+                "alpha": AgentConfig(agent=Agent(TestModel(custom_output_text="ok")))
+            },
             budget=Budget(max_total_messages=0),
         )
         with context_subtree() as tree:
@@ -142,6 +156,7 @@ class TestSpanAttributes:
         async def block_forever(ctx) -> str:
             """Tool that never returns."""
             import asyncio
+
             await asyncio.Event().wait()
             return "never"  # pragma: no cover
 

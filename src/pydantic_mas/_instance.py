@@ -71,7 +71,9 @@ class MASInstance:
                     depth=0,
                 )
 
-                effective_timeout = timeout or self._budget_tracker.budget.timeout_seconds
+                effective_timeout = (
+                    timeout or self._budget_tracker.budget.timeout_seconds
+                )
                 if effective_timeout:
                     async with asyncio.timeout(effective_timeout):
                         await self._run_agents()
@@ -85,12 +87,8 @@ class MASInstance:
             finally:
                 await self._cancel_all_agents()
 
-            span.set_attribute(
-                "mas.termination_reason", str(termination_reason)
-            )
-            span.set_attribute(
-                "mas.message_count", len(self._router.message_log)
-            )
+            span.set_attribute("mas.termination_reason", str(termination_reason))
+            span.set_attribute("mas.message_count", len(self._router.message_log))
 
             return MASResult(
                 message_log=self._router.message_log,
@@ -105,9 +103,7 @@ class MASInstance:
     async def _run_agents(self) -> None:
         """Start all agent loops and wait for termination."""
         for agent_id, node in self._agent_nodes.items():
-            task = asyncio.create_task(
-                node.run_loop(), name=f"agent-{agent_id}"
-            )
+            task = asyncio.create_task(node.run_loop(), name=f"agent-{agent_id}")
             self._tasks[agent_id] = task
 
         await self._monitor_termination()
@@ -121,10 +117,9 @@ class MASInstance:
         while True:
             # Wait for every agent to be in IDLE state.
             # idle_event.wait() returns immediately if already set.
-            await asyncio.gather(*(
-                node.idle_event.wait()
-                for node in self._agent_nodes.values()
-            ))
+            await asyncio.gather(
+                *(node.idle_event.wait() for node in self._agent_nodes.values())
+            )
 
             # All agents are idle — check if queues are also empty
             if self._all_quiesced():

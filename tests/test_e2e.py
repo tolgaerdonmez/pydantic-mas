@@ -140,9 +140,7 @@ class TestCoordinatorDelegatesToWorkers:
             entry_agent="coordinator", prompt="Build a report on X"
         )
 
-        types_by_pair = {
-            (m.sender, m.receiver): m.type for m in result.message_log
-        }
+        types_by_pair = {(m.sender, m.receiver): m.type for m in result.message_log}
         assert types_by_pair[("system", "coordinator")] == MessageType.REQUEST
         assert types_by_pair[("coordinator", "researcher")] == MessageType.REQUEST
         assert types_by_pair[("coordinator", "writer")] == MessageType.REQUEST
@@ -236,9 +234,7 @@ class TestPeerToPeerInteraction:
             }
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start analysis"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start analysis")
 
         assert result.termination_reason == TerminationReason.COMPLETED
 
@@ -248,20 +244,14 @@ class TestPeerToPeerInteraction:
                 "coordinator": Agent(
                     model=self._model_that_sends("analyst", "analyze")
                 ),
-                "analyst": Agent(
-                    model=self._model_that_sends("reviewer", "review")
-                ),
+                "analyst": Agent(model=self._model_that_sends("reviewer", "review")),
                 "reviewer": Agent(model=TestModel()),
             }
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start")
 
-        depths = {
-            (m.sender, m.receiver): m.depth for m in result.message_log
-        }
+        depths = {(m.sender, m.receiver): m.depth for m in result.message_log}
         assert depths[("system", "coordinator")] == 0
         assert depths[("coordinator", "analyst")] == 1
         assert depths[("analyst", "reviewer")] == 2
@@ -272,16 +262,12 @@ class TestPeerToPeerInteraction:
                 "coordinator": Agent(
                     model=self._model_that_sends("analyst", "analyze")
                 ),
-                "analyst": Agent(
-                    model=self._model_that_sends("reviewer", "review")
-                ),
+                "analyst": Agent(model=self._model_that_sends("reviewer", "review")),
                 "reviewer": Agent(model=TestModel()),
             }
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start")
 
         assert result.budget_usage.max_depth_seen == 2
 
@@ -298,9 +284,7 @@ class TestPeerToPeerInteraction:
             }
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start")
 
         pairs = [(m.sender, m.receiver) for m in result.message_log]
         # Peer-to-peer: analyst -> reviewer (not via coordinator)
@@ -347,17 +331,13 @@ class TestBudgetConstrainedInteraction:
                 "coordinator": Agent(
                     model=self._model_that_sends("analyst", "analyze")
                 ),
-                "analyst": Agent(
-                    model=self._model_that_sends("reviewer", "review")
-                ),
+                "analyst": Agent(model=self._model_that_sends("reviewer", "review")),
                 "reviewer": Agent(model=TestModel()),
             },
             budget=Budget(max_total_messages=3),
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start")
 
         assert result.termination_reason == TerminationReason.COMPLETED
         assert result.budget_usage.total_messages == 3
@@ -370,17 +350,13 @@ class TestBudgetConstrainedInteraction:
                 "coordinator": Agent(
                     model=self._model_that_sends("analyst", "analyze")
                 ),
-                "analyst": Agent(
-                    model=self._model_that_sends("reviewer", "review")
-                ),
+                "analyst": Agent(model=self._model_that_sends("reviewer", "review")),
                 "reviewer": Agent(model=TestModel()),
             },
             budget=Budget(max_depth=1),
         )
 
-        result = await instance.run(
-            entry_agent="coordinator", prompt="Start"
-        )
+        result = await instance.run(entry_agent="coordinator", prompt="Start")
 
         assert result.termination_reason == TerminationReason.COMPLETED
         # analyst -> reviewer at depth 2 should have been blocked

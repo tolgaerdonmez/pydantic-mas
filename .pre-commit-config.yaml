@@ -1,0 +1,21 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        language: system
+        pass_filenames: false
+        entry: bash -c 'uv run ruff format src tests'
+        stages: [pre-commit]
+      - id: ruff-lint
+        name: ruff check
+        language: system
+        pass_filenames: false
+        entry: bash -c 'uv run ruff check --fix src tests'
+        stages: [pre-commit]
+      - id: pyright
+        name: pyright
+        language: system
+        pass_filenames: false
+        entry: bash -c 'uv run pyright src'
+        stages: [pre-commit]

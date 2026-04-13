@@ -54,9 +54,7 @@ def _send_model(target: str = "agent_b", content: str = "hello") -> FunctionMode
             parts=[
                 ToolCallPart(
                     tool_name="send_message",
-                    args=json.dumps(
-                        {"target_agent": target, "content": content}
-                    ),
+                    args=json.dumps({"target_agent": target, "content": content}),
                     tool_call_id="send-1",
                 )
             ]
@@ -99,9 +97,7 @@ class TestBeforeSendMessage:
             return ctx
 
         hooks = MASHooks(before_send_message=record)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -118,6 +114,7 @@ class TestBeforeSendMessage:
 
     async def test_hook_can_modify_content(self):
         """before hook changes content; routed message has modified content."""
+
         async def modify(ctx: SendMessageHookContext) -> SendMessageHookContext:
             ctx.content = "MODIFIED: " + ctx.content
             return ctx
@@ -140,6 +137,7 @@ class TestBeforeSendMessage:
 
     async def test_hook_can_change_receiver(self):
         """before hook redirects to a different agent."""
+
         async def redirect(ctx: SendMessageHookContext) -> SendMessageHookContext:
             ctx.receiver_id = "agent_c"
             return ctx
@@ -164,13 +162,12 @@ class TestBeforeSendMessage:
 
     async def test_hook_can_block(self):
         """before hook returns None; message is not routed."""
+
         async def block(ctx: SendMessageHookContext) -> None:
             return None
 
         hooks = MASHooks(before_send_message=block)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -192,9 +189,7 @@ class TestBeforeSendMessage:
             return ctx
 
         hooks = MASHooks(before_send_message=record)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -217,9 +212,7 @@ class TestBeforeSendMessage:
             return ctx
 
         hooks = MASHooks(before_send_message=record)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -246,9 +239,7 @@ class TestAfterSendMessage:
             delivered.append((ctx, msg))
 
         hooks = MASHooks(after_send_message=record)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -275,9 +266,7 @@ class TestAfterSendMessage:
             after_calls.append(msg)
 
         hooks = MASHooks(before_send_message=block, after_send_message=after)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -308,9 +297,7 @@ class TestHookOrdering:
             log.append("after")
 
         hooks = MASHooks(before_send_message=before, after_send_message=after)
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=hooks
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=hooks)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -331,9 +318,7 @@ class TestHookOrdering:
 class TestNoHooks:
     async def test_none_hooks_works(self):
         """hooks=None preserves default send_message behavior."""
-        node, router, _ = _make_node(
-            agent=Agent(model=_send_model()), hooks=None
-        )
+        node, router, _ = _make_node(agent=Agent(model=_send_model()), hooks=None)
         inbox_b: asyncio.Queue[Message] = asyncio.Queue()
         router.register("agent_b", inbox_b)
 
@@ -431,16 +416,12 @@ class TestMASWithHooks:
 
         hooks = MASHooks(after_send_message=log_hook)
 
-        def handler(
-            messages: list[ModelMessage], info: AgentInfo
-        ) -> ModelResponse:
+        def handler(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             for msg in messages:
                 if hasattr(msg, "parts"):
                     for part in msg.parts:
                         if hasattr(part, "tool_name"):
-                            return ModelResponse(
-                                parts=[TextPart(content="Done")]
-                            )
+                            return ModelResponse(parts=[TextPart(content="Done")])
             return ModelResponse(
                 parts=[
                     ToolCallPart(
@@ -458,9 +439,7 @@ class TestMASWithHooks:
 
         mas = MAS(
             agents={
-                "agent_a": AgentConfig(
-                    agent=Agent(model=FunctionModel(handler))
-                ),
+                "agent_a": AgentConfig(agent=Agent(model=FunctionModel(handler))),
                 "agent_b": AgentConfig(agent=Agent(model=TestModel())),
             },
             hooks=hooks,
@@ -470,9 +449,7 @@ class TestMASWithHooks:
 
         assert result.termination_reason == TerminationReason.COMPLETED
         # The logger should have captured agent_a -> agent_b
-        assert any(
-            s == "agent_a" and r == "agent_b" for s, r, _ in logged
-        )
+        assert any(s == "agent_a" and r == "agent_b" for s, r, _ in logged)
 
     async def test_content_modification_e2e(self):
         """before hook modifies content; MASResult message_log reflects change."""
@@ -483,16 +460,12 @@ class TestMASWithHooks:
 
         hooks = MASHooks(before_send_message=tag)
 
-        def handler(
-            messages: list[ModelMessage], info: AgentInfo
-        ) -> ModelResponse:
+        def handler(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             for msg in messages:
                 if hasattr(msg, "parts"):
                     for part in msg.parts:
                         if hasattr(part, "tool_name"):
-                            return ModelResponse(
-                                parts=[TextPart(content="Done")]
-                            )
+                            return ModelResponse(parts=[TextPart(content="Done")])
             return ModelResponse(
                 parts=[
                     ToolCallPart(
@@ -510,9 +483,7 @@ class TestMASWithHooks:
 
         mas = MAS(
             agents={
-                "agent_a": AgentConfig(
-                    agent=Agent(model=FunctionModel(handler))
-                ),
+                "agent_a": AgentConfig(agent=Agent(model=FunctionModel(handler))),
                 "agent_b": AgentConfig(agent=Agent(model=TestModel())),
             },
             hooks=hooks,
