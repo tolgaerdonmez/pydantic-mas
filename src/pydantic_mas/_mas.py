@@ -62,6 +62,10 @@ class MAS:
         budget_tracker = BudgetTracker(self.budget)
         router = MessageRouter(budget_tracker)
 
+        # Shared dict populated below — each node keeps a reference so it
+        # can look up peers (needed by the insertion hooks).
+        peers: dict[str, AgentNode] = {}
+
         agent_nodes: list[AgentNode] = []
         for agent_id, config in self.agents.items():
             if config.agent.name is None:
@@ -74,8 +78,10 @@ class MAS:
                 message_formatter=self.message_formatter,
                 interrupt_on_send=self.interrupt_on_send,
                 hooks=self.hooks,
+                peers=peers,
             )
             router.register(agent_id, node.inbox)
+            peers[agent_id] = node
             agent_nodes.append(node)
 
         instance = MASInstance(

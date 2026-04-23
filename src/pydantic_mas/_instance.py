@@ -2,7 +2,7 @@ import asyncio
 
 from opentelemetry.trace import get_tracer_provider, use_span
 
-from pydantic_mas._agent_node import AgentNode, AgentState
+from pydantic_mas._agent_node import AgentNode, AgentState, _HookRaisedError
 from pydantic_mas._budget import BudgetExceededError, BudgetTracker
 from pydantic_mas._message import MessageType
 from pydantic_mas._result import MASResult, TerminationReason
@@ -61,6 +61,7 @@ class MASInstance:
 
         with use_span(span, end_on_exit=True, record_exception=True):
             termination_reason = TerminationReason.COMPLETED
+            agent_exceptions: list[BaseException] = []
 
             try:
                 self._router.route(
@@ -85,10 +86,13 @@ class MASInstance:
             except BudgetExceededError:
                 termination_reason = TerminationReason.BUDGET_EXCEEDED
             finally:
-                await self._cancel_all_agents()
+                agent_exceptions = await self._cancel_all_agents()
 
             span.set_attribute("mas.termination_reason", str(termination_reason))
             span.set_attribute("mas.message_count", len(self._router.message_log))
+
+            if agent_exceptions:
+                raise agent_exceptions[0]
 
             return MASResult(
                 message_log=self._router.message_log,
@@ -135,11 +139,21 @@ class MASInstance:
             for node in self._agent_nodes.values()
         )
 
-    async def _cancel_all_agents(self) -> None:
-        """Cancel all running agent tasks and wait for cleanup."""
+    async def _cancel_all_agents(self) -> list[BaseException]:
+        """Cancel all running agent tasks and wait for cleanup.
+
+        Returns any non-cancellation exceptions captured from agent loops,
+        so the caller can surface them rather than silently swallow.
+        """
         for task in self._tasks.values():
             if not task.done():
                 task.cancel()
 
-        if self._tasks:
-            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        if not self._tasks:
+            return []
+
+        results = await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        # Only hook-raised exceptions surface. Agent-internal crashes
+        # (LLM failures, tool bugs) stay contained so one bad agent can't
+        # bring down the whole MAS — matching pre-hook behavior.
+        return [r.original for r in results if isinstance(r, _HookRaisedError)]

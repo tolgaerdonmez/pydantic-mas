@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from enum import StrEnum
 from typing import Any, Callable
 
@@ -11,9 +12,25 @@ from pydantic_graph.nodes import End
 
 from pydantic_mas._budget import BudgetExceededError
 from pydantic_mas._formatter import default_message_formatter
-from pydantic_mas._hooks import MASHooks, SendMessageHookContext
+from pydantic_mas._hooks import MASHooks, MASInsertContext
 from pydantic_mas._message import Message, MessageType
 from pydantic_mas._router import MessageRouter
+
+
+class _HookRaisedError(BaseException):
+    """Private marker wrapping an exception raised from a MAS hook.
+
+    Hook exceptions must propagate out of `mas.run()`, while agent-internal
+    crashes stay contained. This wrapper lets the instance tell the two
+    apart when draining agent tasks. Inherits from BaseException so it is
+    not caught by `except Exception` blocks inside pydantic-ai internals.
+    """
+
+    __slots__ = ("original",)
+
+    def __init__(self, original: BaseException):
+        super().__init__(str(original))
+        self.original = original
 
 
 class AgentState(StrEnum):
@@ -40,6 +57,7 @@ class AgentNode[DepsT]:
         message_formatter: Callable[[Message], str] | None = None,
         interrupt_on_send: bool = False,
         hooks: MASHooks | None = None,
+        peers: "dict[str, AgentNode[Any]] | None" = None,
     ):
         self.agent_id = agent_id
         self.agent = agent
@@ -48,6 +66,10 @@ class AgentNode[DepsT]:
         self.message_formatter = message_formatter or default_message_formatter
         self._interrupt_on_send = interrupt_on_send
         self._hooks = hooks
+        # Shared mutable dict: MAS.run() populates it progressively as each
+        # node is constructed, so every node sees the full peer set by the
+        # time the run loop starts.
+        self._peers = peers
 
         self.inbox: asyncio.Queue[Message] = asyncio.Queue()
         self.history: list[ModelMessage] = []
@@ -76,7 +98,6 @@ class AgentNode[DepsT]:
         """
         node = self
         router = self.router
-        hooks = self._hooks
 
         async def send_message(target_agent: str, content: str) -> str:
             """Send a message to another agent in the system.
@@ -86,35 +107,17 @@ class AgentNode[DepsT]:
                 content: The message content to send.
             """
             try:
-                assert node.current_message is not None
-                context = SendMessageHookContext(
-                    sender_id=node.agent_id,
-                    receiver_id=target_agent,
+                msg = router.route(
+                    sender=node.agent_id,
+                    receiver=target_agent,
                     content=content,
-                    current_message=node.current_message,
+                    type=MessageType.REQUEST,
                     depth=node.current_depth + 1,
                 )
 
-                if hooks and hooks.before_send_message:
-                    result = await hooks.before_send_message(context)
-                    if result is None:
-                        return "Message blocked by hook."
-                    context = result
-
-                msg = router.route(
-                    sender=context.sender_id,
-                    receiver=context.receiver_id,
-                    content=context.content,
-                    type=MessageType.REQUEST,
-                    depth=context.depth,
-                )
-
-                if hooks and hooks.after_send_message:
-                    await hooks.after_send_message(context, msg)
-
                 if node._interrupt_on_send:
                     node._interrupt_requested = True
-                return f"Message sent to '{context.receiver_id}' (id: {msg.id})"
+                return f"Message sent to '{target_agent}' (id: {msg.id})"
             except (ValueError, BudgetExceededError) as e:
                 return f"Error: {e}"
 
@@ -152,6 +155,8 @@ class AgentNode[DepsT]:
 
     async def _process_message(self, message: Message) -> None:
         """Process a single incoming message."""
+        message = await self._fire_insertion_hook(message)
+
         formatted = self.message_formatter(message)
         self._interrupt_requested = False
 
@@ -159,6 +164,48 @@ class AgentNode[DepsT]:
             await self._process_with_interrupt(formatted, message)
         else:
             await self._process_simple(formatted, message)
+
+    async def _fire_insertion_hook(self, message: Message) -> Message:
+        """Fire the matching MAS insertion hook for this message.
+
+        Returns the (possibly modified) Message. If no hook is registered,
+        returns the message unchanged. Exceptions from the hook propagate.
+        """
+        if self._hooks is None:
+            return message
+
+        if message.type == MessageType.REQUEST:
+            hook = self._hooks.on_request_insert
+            caller_node = self._peers.get(message.sender) if self._peers else None
+            callee_node = self
+        elif message.type == MessageType.REPLY:
+            hook = self._hooks.on_reply_insert
+            caller_node = self
+            callee_node = self._peers.get(message.sender) if self._peers else None
+        else:
+            return message
+
+        if hook is None or callee_node is None:
+            return message
+
+        ctx: MASInsertContext[Any, Any] = MASInsertContext(
+            caller_id=caller_node.agent_id if caller_node else message.sender,
+            caller_deps=caller_node.deps if caller_node else None,
+            caller_history=list(caller_node.history) if caller_node else [],
+            callee_id=callee_node.agent_id,
+            callee_deps=callee_node.deps,
+            callee_history=list(callee_node.history),
+            message=message,
+            depth=message.depth,
+        )
+
+        try:
+            result = hook(ctx)
+            if inspect.isawaitable(result):
+                result = await result
+        except BaseException as exc:
+            raise _HookRaisedError(exc) from exc
+        return result
 
     async def _process_simple(self, formatted: str, message: Message) -> None:
         """Simple processing: run agent to completion."""
