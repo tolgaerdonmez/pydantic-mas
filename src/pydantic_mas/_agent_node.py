@@ -193,6 +193,8 @@ class AgentNode[DepsT]:
             incoming_message=message,
             history=list(self.history),
             deps=self.deps,
+            router=self.router,
+            current_depth=self.current_depth,
         )
         result = self.agent_factory(ctx)
         if inspect.isawaitable(result):

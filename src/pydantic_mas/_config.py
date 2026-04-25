@@ -1,12 +1,15 @@
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 
 from pydantic_mas._message import Message
+
+if TYPE_CHECKING:
+    from pydantic_mas._router import MessageRouter
 
 
 class ReplyStrategy(StrEnum):
@@ -26,17 +29,29 @@ class FactoryContext(Generic[DepsT]):
     History stays owned by the AgentNode and is passed to `agent.run()` as
     `message_history`, so swapping the Agent per message preserves continuity.
 
+    `router` and `current_depth` are exposed so the factory can wire
+    framework-aware tools — e.g. an external `send_message`-style tool that
+    routes a message with extra metadata. Capture them in a closure when
+    building the Agent's tools.
+
     Attributes:
         agent_id: The receiving agent's id.
         incoming_message: The envelope about to be processed (post hooks).
         history: Snapshot of the AgentNode's conversation history at this point.
         deps: Resolved deps for this AgentNode.
+        router: The MAS instance's MessageRouter. Use `.route(...)` to send
+            messages from inside custom tools.
+        current_depth: Depth of the message currently being processed. Use
+            `current_depth + 1` as the depth of any message a tool routes
+            in response.
     """
 
     agent_id: str
     incoming_message: Message
     history: list[ModelMessage] = field(default_factory=list)
     deps: DepsT | None = None
+    router: "MessageRouter | None" = None
+    current_depth: int = 0
 
 
 AgentFactoryResult = Agent[Any] | Awaitable[Agent[Any]]

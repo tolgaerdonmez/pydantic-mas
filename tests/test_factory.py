@@ -64,6 +64,10 @@ class TestFactoryContextShape:
         assert ctx.incoming_message.content == "c"
         assert ctx.history == []
         assert ctx.deps is None
+        # router/current_depth default to None/0 when constructed bare;
+        # AgentNode populates them with live values per message.
+        assert ctx.router is None
+        assert ctx.current_depth == 0
 
 
 # ---------------------------------------------------------------------------
