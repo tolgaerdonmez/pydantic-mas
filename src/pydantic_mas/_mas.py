@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic_mas._agent_node import AgentNode
 from pydantic_mas._budget import Budget, BudgetTracker
@@ -42,6 +42,7 @@ class MAS:
         entry_agent: str,
         prompt: str,
         timeout: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MASResult:
         """Create a new MASInstance and run it to completion.
 
@@ -49,6 +50,9 @@ class MAS:
             entry_agent: ID of the agent to receive the initial message.
             prompt: The initial message content.
             timeout: Optional override for budget timeout.
+            metadata: Optional metadata stamped onto the initial system->entry
+                message envelope. Reachable from `agent_factory` and hooks via
+                `incoming_message.metadata` / `ctx.message.metadata`.
 
         Raises:
             ValueError: If entry_agent is not a registered agent.
@@ -68,11 +72,12 @@ class MAS:
 
         agent_nodes: list[AgentNode] = []
         for agent_id, config in self.agents.items():
-            if config.agent.name is None:
+            if config.agent is not None and config.agent.name is None:
                 config.agent._name = agent_id
             node = AgentNode(
                 agent_id=agent_id,
                 agent=config.agent,
+                agent_factory=config.agent_factory,
                 router=router,
                 deps=config.resolve_deps(),
                 message_formatter=self.message_formatter,
@@ -94,4 +99,5 @@ class MAS:
             entry_agent=entry_agent,
             prompt=prompt,
             timeout=timeout,
+            metadata=metadata,
         )

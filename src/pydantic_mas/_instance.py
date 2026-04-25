@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from opentelemetry.trace import get_tracer_provider, use_span
 
@@ -34,6 +35,7 @@ class MASInstance:
         entry_agent: str,
         prompt: str,
         timeout: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MASResult:
         """Run the instance to completion.
 
@@ -70,6 +72,7 @@ class MASInstance:
                     content=prompt,
                     type=MessageType.REQUEST,
                     depth=0,
+                    metadata=metadata,
                 )
 
                 effective_timeout = (

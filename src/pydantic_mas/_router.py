@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 from pydantic_mas._budget import BudgetTracker
 from pydantic_mas._message import Message, MessageType
@@ -26,6 +27,7 @@ class MessageRouter:
         type: MessageType,
         in_reply_to: str | None = None,
         depth: int = 0,
+        metadata: dict[str, Any] | None = None,
     ) -> Message:
         """Create and deliver a message. Synchronous (non-blocking).
 
@@ -55,6 +57,7 @@ class MessageRouter:
             type=type,
             in_reply_to=in_reply_to,
             depth=depth,
+            metadata=metadata or {},
         )
 
         self._message_log.append(message)

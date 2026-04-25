@@ -11,6 +11,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_graph.nodes import End
 
 from pydantic_mas._budget import BudgetExceededError
+from pydantic_mas._config import AgentFactory, FactoryContext
 from pydantic_mas._formatter import default_message_formatter
 from pydantic_mas._hooks import MASHooks, MASInsertContext
 from pydantic_mas._message import Message, MessageType
@@ -51,16 +52,24 @@ class AgentNode[DepsT]:
     def __init__(
         self,
         agent_id: str,
-        agent: Agent[DepsT],
-        router: MessageRouter,
+        agent: Agent[DepsT] | None = None,
+        agent_factory: AgentFactory | None = None,
+        router: MessageRouter | None = None,
         deps: DepsT = None,
         message_formatter: Callable[[Message], str] | None = None,
         interrupt_on_send: bool = False,
         hooks: MASHooks | None = None,
         peers: "dict[str, AgentNode[Any]] | None" = None,
     ):
+        if (agent is None) == (agent_factory is None):
+            raise ValueError(
+                "AgentNode requires exactly one of `agent` or `agent_factory`."
+            )
+        if router is None:
+            raise ValueError("AgentNode requires a router.")
         self.agent_id = agent_id
         self.agent = agent
+        self.agent_factory = agent_factory
         self.router = router
         self.deps = deps
         self.message_formatter = message_formatter or default_message_formatter
@@ -157,13 +166,40 @@ class AgentNode[DepsT]:
         """Process a single incoming message."""
         message = await self._fire_insertion_hook(message)
 
+        agent = await self._resolve_agent(message)
+
         formatted = self.message_formatter(message)
         self._interrupt_requested = False
 
         if self._interrupt_on_send:
-            await self._process_with_interrupt(formatted, message)
+            await self._process_with_interrupt(agent, formatted, message)
         else:
-            await self._process_simple(formatted, message)
+            await self._process_simple(agent, formatted, message)
+
+    async def _resolve_agent(self, message: Message) -> Agent[DepsT]:
+        """Return the Agent that should run this message.
+
+        Static path: returns the constructor-time Agent unchanged.
+        Factory path: invokes the factory with a FactoryContext and uses the
+        Agent it returns for this single `agent.run()` call. History stays
+        with this AgentNode regardless of which Agent is built.
+        """
+        if self.agent_factory is None:
+            assert self.agent is not None
+            return self.agent
+
+        ctx: FactoryContext[DepsT] = FactoryContext(
+            agent_id=self.agent_id,
+            incoming_message=message,
+            history=list(self.history),
+            deps=self.deps,
+        )
+        result = self.agent_factory(ctx)
+        if inspect.isawaitable(result):
+            result = await result
+        if result.name is None:
+            result._name = self.agent_id
+        return result
 
     async def _fire_insertion_hook(self, message: Message) -> Message:
         """Fire the matching MAS insertion hook for this message.
@@ -207,9 +243,11 @@ class AgentNode[DepsT]:
             raise _HookRaisedError(exc) from exc
         return result
 
-    async def _process_simple(self, formatted: str, message: Message) -> None:
+    async def _process_simple(
+        self, agent: Agent[DepsT], formatted: str, message: Message
+    ) -> None:
         """Simple processing: run agent to completion."""
-        result = await self.agent.run(
+        result = await agent.run(
             user_prompt=formatted,
             message_history=self.history,
             deps=self.deps,
@@ -219,7 +257,9 @@ class AgentNode[DepsT]:
         self.history = list(result.all_messages())
         self._handle_last_output_reply(message, result)
 
-    async def _process_with_interrupt(self, formatted: str, message: Message) -> None:
+    async def _process_with_interrupt(
+        self, agent: Agent[DepsT], formatted: str, message: Message
+    ) -> None:
         """Processing with interrupt-on-send: use Agent.iter() for turn control.
 
         Agent.iter() yields nodes BEFORE they execute. When we see a
@@ -232,7 +272,7 @@ class AgentNode[DepsT]:
         """
         interrupted = False
 
-        async with self.agent.iter(
+        async with agent.iter(
             user_prompt=formatted,
             message_history=self.history,
             deps=self.deps,
@@ -260,24 +300,46 @@ class AgentNode[DepsT]:
             self._handle_last_output_reply(message, run.result)
 
     def _handle_last_output_reply(
-        self, original_message: Message, result: AgentRunResult[str]
+        self, original_message: Message, result: AgentRunResult[Any]
     ) -> None:
-        """last_output strategy: auto-reply with the agent's text output."""
+        """last_output strategy: auto-reply with the agent's output.
+
+        For string outputs, the reply content is the string verbatim.
+        For structured outputs (e.g. when the agent was built with an
+        `output_type`), the reply content is a string rendering and the
+        live object is stashed in `reply.metadata["structured_output"]`
+        so hooks can read the typed value directly.
+        """
         if original_message.type != MessageType.REQUEST:
             return
         if original_message.sender == "system":
             return
 
-        output_text = result.output
-        if isinstance(output_text, str) and output_text.strip():
-            try:
-                self.router.route(
-                    sender=self.agent_id,
-                    receiver=original_message.sender,
-                    content=output_text,
-                    type=MessageType.REPLY,
-                    in_reply_to=original_message.id,
-                    depth=original_message.depth,
-                )
-            except Exception:
-                pass  # budget exceeded during reply — silently drop
+        output = result.output
+        if output is None:
+            return
+
+        metadata: dict[str, Any] = {}
+        content: str
+        if isinstance(output, str):
+            content = output
+        else:
+            metadata["structured_output"] = output
+            dump_json = getattr(output, "model_dump_json", None)
+            content = str(dump_json()) if callable(dump_json) else str(output)
+
+        if not content.strip():
+            return
+
+        try:
+            self.router.route(
+                sender=self.agent_id,
+                receiver=original_message.sender,
+                content=content,
+                type=MessageType.REPLY,
+                in_reply_to=original_message.id,
+                depth=original_message.depth,
+                metadata=metadata or None,
+            )
+        except Exception:
+            pass  # budget exceeded during reply — silently drop

@@ -7,7 +7,7 @@ from pydantic_mas._budget import (
     BudgetSnapshot,
     BudgetTracker,
 )
-from pydantic_mas._config import AgentConfig, ReplyStrategy
+from pydantic_mas._config import AgentConfig, FactoryContext, ReplyStrategy
 from pydantic_mas._formatter import default_message_formatter
 from pydantic_mas._hooks import MASHooks, MASInsertContext
 from pydantic_mas._instance import MASInstance
@@ -20,6 +20,7 @@ __all__ = [
     "AgentConfig",
     "AgentNode",
     "AgentState",
+    "FactoryContext",
     "Budget",
     "BudgetExceededError",
     "BudgetSnapshot",

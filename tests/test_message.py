@@ -83,6 +83,8 @@ class TestMessage:
             Message(sender="a", receiver="b", type=MessageType.REQUEST, content=123)
 
     def test_serialization_roundtrip(self):
+        """Non-metadata fields round-trip cleanly. Metadata is one-way
+        (dumped as a string for observability; not expected to validate back)."""
         msg = Message(
             sender="agent_a",
             receiver="agent_b",
@@ -92,5 +94,12 @@ class TestMessage:
             in_reply_to="prev-id",
         )
         data = msg.model_dump()
+        data.pop("metadata", None)
         restored = Message.model_validate(data)
-        assert restored == msg
+        assert restored.sender == msg.sender
+        assert restored.receiver == msg.receiver
+        assert restored.type == msg.type
+        assert restored.content == msg.content
+        assert restored.depth == msg.depth
+        assert restored.in_reply_to == msg.in_reply_to
+        assert restored.id == msg.id
