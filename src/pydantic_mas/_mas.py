@@ -22,6 +22,7 @@ class MAS:
         agents: dict[str, AgentConfig],
         reply_strategy: ReplyStrategy | str = ReplyStrategy.LAST_OUTPUT,
         interrupt_on_send: bool = False,
+        enforce_reply_protocol: bool = True,
         budget: Budget | None = None,
         message_formatter: Callable[[Message], str] | None = None,
         hooks: MASHooks | None = None,
@@ -33,6 +34,7 @@ class MAS:
             else reply_strategy
         )
         self.interrupt_on_send = interrupt_on_send
+        self.enforce_reply_protocol = enforce_reply_protocol
         self.budget = budget or Budget()
         self.message_formatter = message_formatter or default_message_formatter
         self.hooks = hooks
@@ -77,6 +79,7 @@ class MAS:
                 deps=config.resolve_deps(),
                 message_formatter=self.message_formatter,
                 interrupt_on_send=self.interrupt_on_send,
+                enforce_reply_protocol=self.enforce_reply_protocol,
                 hooks=self.hooks,
                 peers=peers,
             )

@@ -56,6 +56,7 @@ class AgentNode[DepsT]:
         deps: DepsT = None,
         message_formatter: Callable[[Message], str] | None = None,
         interrupt_on_send: bool = False,
+        enforce_reply_protocol: bool = True,
         hooks: MASHooks | None = None,
         peers: "dict[str, AgentNode[Any]] | None" = None,
     ):
@@ -65,6 +66,7 @@ class AgentNode[DepsT]:
         self.deps = deps
         self.message_formatter = message_formatter or default_message_formatter
         self._interrupt_on_send = interrupt_on_send
+        self.enforce_reply_protocol = enforce_reply_protocol
         self._hooks = hooks
         # Shared mutable dict: MAS.run() populates it progressively as each
         # node is constructed, so every node sees the full peer set by the
@@ -81,6 +83,7 @@ class AgentNode[DepsT]:
         self._idle_event.set()
 
         self._interrupt_requested: bool = False
+        self._reply_intercepted: bool = False
 
     @property
     def idle_event(self) -> asyncio.Event:
@@ -107,6 +110,39 @@ class AgentNode[DepsT]:
                 content: The message content to send.
             """
             try:
+                # Reply-protocol intercept: if the model is using send_message
+                # to answer the requester it is currently serving, route a
+                # REPLY directly and terminate the run. This keeps the message
+                # graph clean (one REQUEST → one REPLY) instead of producing
+                # both a tool-driven REQUEST and an auto last_output REPLY.
+                current = node.current_message
+                if (
+                    node.enforce_reply_protocol
+                    and current is not None
+                    and current.type == MessageType.REQUEST
+                    and current.sender != "system"
+                    and target_agent == current.sender
+                ):
+                    if node._reply_intercepted:
+                        return (
+                            f"Error: already replied to '{target_agent}' this "
+                            "turn; run is terminating."
+                        )
+                    msg = router.route(
+                        sender=node.agent_id,
+                        receiver=target_agent,
+                        content=content,
+                        type=MessageType.REPLY,
+                        in_reply_to=current.id,
+                        depth=current.depth,
+                    )
+                    node._reply_intercepted = True
+                    node._interrupt_requested = True
+                    return (
+                        f"Reply delivered to '{target_agent}' (id: {msg.id}). "
+                        "Run terminating."
+                    )
+
                 msg = router.route(
                     sender=node.agent_id,
                     receiver=target_agent,
@@ -159,8 +195,13 @@ class AgentNode[DepsT]:
 
         formatted = self.message_formatter(message)
         self._interrupt_requested = False
+        self._reply_intercepted = False
 
-        if self._interrupt_on_send:
+        # The iter() path is required whenever we may need to break the run
+        # mid-flight: either explicit interrupt-on-send, or the reply-protocol
+        # intercept which terminates B as soon as it tries to send_message
+        # back to its current requester.
+        if self._interrupt_on_send or self.enforce_reply_protocol:
             await self._process_with_interrupt(formatted, message)
         else:
             await self._process_simple(formatted, message)
@@ -263,6 +304,8 @@ class AgentNode[DepsT]:
         self, original_message: Message, result: AgentRunResult[str]
     ) -> None:
         """last_output strategy: auto-reply with the agent's text output."""
+        if self._reply_intercepted:
+            return
         if original_message.type != MessageType.REQUEST:
             return
         if original_message.sender == "system":
