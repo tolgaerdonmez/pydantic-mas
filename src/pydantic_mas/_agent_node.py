@@ -79,6 +79,18 @@ class AgentNode[DepsT]:
         self.current_depth: int = 0
         self.current_message: Message | None = None
 
+        # Reply-debt tracking: REQUESTs this agent has accepted but not yet
+        # answered. The list has no implicit ordering — debts are removed by
+        # id whenever they resolve, in whatever order their sub-conversations
+        # finish. `current_debt` points at the entry being served in the
+        # current inbox iteration. `_outgoing_scope` records, for each
+        # outgoing REQUEST this agent fires, which debt was active at the
+        # time, so an incoming REPLY can be re-attributed to the correct
+        # debt frame even after the agent has parked and woken.
+        self.reply_debt: list[Message] = []
+        self.current_debt: Message | None = None
+        self._outgoing_scope: dict[str, str] = {}
+
         self._idle_event: asyncio.Event = asyncio.Event()
         self._idle_event.set()
 
@@ -111,17 +123,17 @@ class AgentNode[DepsT]:
             """
             try:
                 # Reply-protocol intercept: if the model is using send_message
-                # to answer the requester it is currently serving, route a
-                # REPLY directly and terminate the run. This keeps the message
-                # graph clean (one REQUEST → one REPLY) instead of producing
-                # both a tool-driven REQUEST and an auto last_output REPLY.
-                current = node.current_message
+                # to answer the requester whose debt this iteration is serving,
+                # route a REPLY directly and terminate the run. The debt may
+                # have been resolved on a much earlier inbox cycle (e.g. via a
+                # sub-reply chain) — `current_debt` carries that frame across
+                # iterations, while `current_message` is just the literal
+                # popped envelope.
+                debt = node.current_debt
                 if (
                     node.enforce_reply_protocol
-                    and current is not None
-                    and current.type == MessageType.REQUEST
-                    and current.sender != "system"
-                    and target_agent == current.sender
+                    and debt is not None
+                    and target_agent == debt.sender
                 ):
                     if node._reply_intercepted:
                         return (
@@ -133,9 +145,15 @@ class AgentNode[DepsT]:
                         receiver=target_agent,
                         content=content,
                         type=MessageType.REPLY,
-                        in_reply_to=current.id,
-                        depth=current.depth,
+                        in_reply_to=debt.id,
+                        depth=debt.depth,
                     )
+                    # Debt resolved — drop from the list. We deliberately keep
+                    # `current_debt` set so a second send to the same target
+                    # within the same tool batch hits the `_reply_intercepted`
+                    # guard above instead of falling through to a fresh
+                    # REQUEST.
+                    node.reply_debt = [d for d in node.reply_debt if d.id != debt.id]
                     node._reply_intercepted = True
                     node._interrupt_requested = True
                     return (
@@ -150,6 +168,12 @@ class AgentNode[DepsT]:
                     type=MessageType.REQUEST,
                     depth=node.current_depth + 1,
                 )
+
+                # Remember which debt frame this outgoing REQUEST was sent
+                # under so the eventual REPLY can be routed back to the
+                # correct debt even if other inbox messages arrive in between.
+                if debt is not None:
+                    node._outgoing_scope[msg.id] = debt.id
 
                 if node._interrupt_on_send:
                     node._interrupt_requested = True
@@ -181,6 +205,7 @@ class AgentNode[DepsT]:
                 self._idle_event.clear()
                 self.current_message = message
                 self.current_depth = message.depth
+                self._resolve_current_debt(message)
 
                 await self._process_message(message)
         except asyncio.CancelledError:
@@ -188,6 +213,35 @@ class AgentNode[DepsT]:
         finally:
             self.state = AgentState.IDLE
             self._idle_event.set()
+
+    def _resolve_current_debt(self, message: Message) -> None:
+        """Set `current_debt` to the debt frame this iteration is serving.
+
+        - REQUEST from a non-system peer: a brand-new debt — push onto
+          `reply_debt` and serve it.
+        - REQUEST from "system": no one to repay; debt is None.
+        - REPLY: re-attribute via `_outgoing_scope` (recorded when this
+          agent fired the originating REQUEST). If the parent debt is
+          still outstanding, serve it; otherwise None (sub-reply for an
+          already-resolved frame, or for a request we never made).
+        - NOTIFICATION (or anything else): no debt frame.
+        """
+        if message.type == MessageType.REQUEST:
+            if message.sender == "system":
+                self.current_debt = None
+                return
+            self.reply_debt.append(message)
+            self.current_debt = message
+            return
+
+        if message.type == MessageType.REPLY and message.in_reply_to is not None:
+            debt_id = self._outgoing_scope.get(message.in_reply_to)
+            if debt_id is not None:
+                for d in self.reply_debt:
+                    if d.id == debt_id:
+                        self.current_debt = d
+                        return
+        self.current_debt = None
 
     async def _process_message(self, message: Message) -> None:
         """Process a single incoming message."""
@@ -202,9 +256,9 @@ class AgentNode[DepsT]:
         # intercept which terminates B as soon as it tries to send_message
         # back to its current requester.
         if self._interrupt_on_send or self.enforce_reply_protocol:
-            await self._process_with_interrupt(formatted, message)
+            await self._process_with_interrupt(formatted)
         else:
-            await self._process_simple(formatted, message)
+            await self._process_simple(formatted)
 
     async def _fire_insertion_hook(self, message: Message) -> Message:
         """Fire the matching MAS insertion hook for this message.
@@ -248,7 +302,7 @@ class AgentNode[DepsT]:
             raise _HookRaisedError(exc) from exc
         return result
 
-    async def _process_simple(self, formatted: str, message: Message) -> None:
+    async def _process_simple(self, formatted: str) -> None:
         """Simple processing: run agent to completion."""
         result = await self.agent.run(
             user_prompt=formatted,
@@ -258,9 +312,9 @@ class AgentNode[DepsT]:
         )
 
         self.history = list(result.all_messages())
-        self._handle_last_output_reply(message, result)
+        self._handle_last_output_reply(result)
 
-    async def _process_with_interrupt(self, formatted: str, message: Message) -> None:
+    async def _process_with_interrupt(self, formatted: str) -> None:
         """Processing with interrupt-on-send: use Agent.iter() for turn control.
 
         Agent.iter() yields nodes BEFORE they execute. When we see a
@@ -298,29 +352,38 @@ class AgentNode[DepsT]:
                 self.history = list(run.all_messages())
 
         if not interrupted and run.result is not None:
-            self._handle_last_output_reply(message, run.result)
+            self._handle_last_output_reply(run.result)
 
-    def _handle_last_output_reply(
-        self, original_message: Message, result: AgentRunResult[str]
-    ) -> None:
-        """last_output strategy: auto-reply with the agent's text output."""
+    def _handle_last_output_reply(self, result: AgentRunResult[str]) -> None:
+        """last_output strategy: auto-reply against the active debt frame.
+
+        If `current_debt` is set, the agent's final text settles that debt:
+        a REPLY is routed to the debt's original requester (which may be
+        several inbox cycles upstream from `current_message`), and the
+        debt is removed from the list. If there is no active debt
+        (system-entry agent, processing a REPLY whose parent was already
+        resolved, NOTIFICATION, etc.) there is nothing to auto-route.
+        """
         if self._reply_intercepted:
             return
-        if original_message.type != MessageType.REQUEST:
-            return
-        if original_message.sender == "system":
+        debt = self.current_debt
+        if debt is None:
             return
 
         output_text = result.output
-        if isinstance(output_text, str) and output_text.strip():
-            try:
-                self.router.route(
-                    sender=self.agent_id,
-                    receiver=original_message.sender,
-                    content=output_text,
-                    type=MessageType.REPLY,
-                    in_reply_to=original_message.id,
-                    depth=original_message.depth,
-                )
-            except Exception:
-                pass  # budget exceeded during reply — silently drop
+        if not (isinstance(output_text, str) and output_text.strip()):
+            return
+
+        try:
+            self.router.route(
+                sender=self.agent_id,
+                receiver=debt.sender,
+                content=output_text,
+                type=MessageType.REPLY,
+                in_reply_to=debt.id,
+                depth=debt.depth,
+            )
+            self.reply_debt = [d for d in self.reply_debt if d.id != debt.id]
+            self.current_debt = None
+        except Exception:
+            pass  # budget exceeded during reply — silently drop
