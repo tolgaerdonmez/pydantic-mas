@@ -2,7 +2,7 @@ import asyncio
 
 from opentelemetry.trace import get_tracer_provider, use_span
 
-from pydantic_mas._agent_node import AgentNode, AgentState, _HookRaisedError
+from pydantic_mas._agent_node import AgentNode
 from pydantic_mas._budget import BudgetExceededError, BudgetTracker
 from pydantic_mas._message import MessageType
 from pydantic_mas._result import MASResult, TerminationReason
@@ -15,7 +15,9 @@ class MASInstance:
     """A single isolated MAS runtime.
 
     Owns all AgentNode instances, the MessageRouter, and the BudgetTracker.
-    Manages agent task lifecycle and detects termination.
+    Supervises agent tasks with a fail-fast policy: if any agent raises an
+    unhandled exception, the run is torn down and the exception propagates
+    out of `run()` to the library user.
     """
 
     def __init__(
@@ -27,7 +29,6 @@ class MASInstance:
         self._agent_nodes = {node.agent_id: node for node in agent_nodes}
         self._router = router
         self._budget_tracker = budget_tracker
-        self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def run(
         self,
@@ -44,6 +45,9 @@ class MASInstance:
 
         Raises:
             ValueError: If entry_agent is not registered.
+            BaseException: Any exception raised inside an agent's run loop
+                (tool, model handler, hook, output validator, etc.) propagates
+                out unchanged.
         """
         if entry_agent not in self._agent_nodes:
             raise ValueError(
@@ -61,7 +65,6 @@ class MASInstance:
 
         with use_span(span, end_on_exit=True, record_exception=True):
             termination_reason = TerminationReason.COMPLETED
-            agent_exceptions: list[BaseException] = []
 
             try:
                 self._router.route(
@@ -77,22 +80,17 @@ class MASInstance:
                 )
                 if effective_timeout:
                     async with asyncio.timeout(effective_timeout):
-                        await self._run_agents()
+                        await self._run_supervised()
                 else:
-                    await self._run_agents()
+                    await self._run_supervised()
 
             except TimeoutError:
                 termination_reason = TerminationReason.TIMEOUT
             except BudgetExceededError:
                 termination_reason = TerminationReason.BUDGET_EXCEEDED
-            finally:
-                agent_exceptions = await self._cancel_all_agents()
 
             span.set_attribute("mas.termination_reason", str(termination_reason))
             span.set_attribute("mas.message_count", len(self._router.message_log))
-
-            if agent_exceptions:
-                raise agent_exceptions[0]
 
             return MASResult(
                 message_log=self._router.message_log,
@@ -104,56 +102,41 @@ class MASInstance:
                 budget_usage=self._budget_tracker.snapshot(),
             )
 
-    async def _run_agents(self) -> None:
-        """Start all agent loops and wait for termination."""
-        for agent_id, node in self._agent_nodes.items():
-            task = asyncio.create_task(node.run_loop(), name=f"agent-{agent_id}")
-            self._tasks[agent_id] = task
+    async def _run_supervised(self) -> None:
+        """Run all agent loops; return when the run quiesces or any agent raises.
 
-        await self._monitor_termination()
-
-    async def _monitor_termination(self) -> None:
-        """Wait until all agents are idle and all queues are empty.
-
-        Uses event-driven detection: waits for all agents to signal idle,
-        then checks the global quiescence condition.
+        Termination contract:
+          - Quiescence (router.outstanding == 0) signals clean completion. The
+            watcher task fires, all agent tasks are cancelled, and we return.
+          - If any agent task raises a non-CancelledError exception, that
+            exception is captured and re-raised after cancelling the rest.
+            This is the fail-fast guarantee: agent failures reach the caller
+            of `mas.run()` unchanged.
         """
-        while True:
-            # Wait for every agent to be in IDLE state.
-            # idle_event.wait() returns immediately if already set.
-            await asyncio.gather(
-                *(node.idle_event.wait() for node in self._agent_nodes.values())
-            )
-
-            # All agents are idle — check if queues are also empty
-            if self._all_quiesced():
-                return
-
-            # Some queue still has items. Yield so agents can pick them up.
-            await asyncio.sleep(0)
-
-    def _all_quiesced(self) -> bool:
-        """Check if all agents are idle with empty queues."""
-        return all(
-            node.state == AgentState.IDLE and node.inbox.empty()
+        agent_tasks: list[asyncio.Task[None]] = [
+            asyncio.create_task(node.run_loop(), name=f"agent-{node.agent_id}")
             for node in self._agent_nodes.values()
-        )
+        ]
+        watcher = asyncio.create_task(self._router.wait_quiet(), name="quiescence")
+        all_tasks: list[asyncio.Task[None]] = [*agent_tasks, watcher]
 
-    async def _cancel_all_agents(self) -> list[BaseException]:
-        """Cancel all running agent tasks and wait for cleanup.
+        first_exc: BaseException | None = None
+        try:
+            await asyncio.wait(all_tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in all_tasks:
+                if not t.done():
+                    t.cancel()
+            # Drain everything so we can inspect for unsurfaced exceptions and
+            # so no task is left dangling. `return_exceptions=True` prevents
+            # a sibling's exception from masking another.
+            results = await asyncio.gather(*all_tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, BaseException) and not isinstance(
+                    r, asyncio.CancelledError
+                ):
+                    first_exc = r
+                    break
 
-        Returns any non-cancellation exceptions captured from agent loops,
-        so the caller can surface them rather than silently swallow.
-        """
-        for task in self._tasks.values():
-            if not task.done():
-                task.cancel()
-
-        if not self._tasks:
-            return []
-
-        results = await asyncio.gather(*self._tasks.values(), return_exceptions=True)
-        # Only hook-raised exceptions surface. Agent-internal crashes
-        # (LLM failures, tool bugs) stay contained so one bad agent can't
-        # bring down the whole MAS — matching pre-hook behavior.
-        return [r.original for r in results if isinstance(r, _HookRaisedError)]
+        if first_exc is not None:
+            raise first_exc

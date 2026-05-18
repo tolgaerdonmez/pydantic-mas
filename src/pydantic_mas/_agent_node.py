@@ -17,22 +17,6 @@ from pydantic_mas._message import Message, MessageType
 from pydantic_mas._router import MessageRouter
 
 
-class _HookRaisedError(BaseException):
-    """Private marker wrapping an exception raised from a MAS hook.
-
-    Hook exceptions must propagate out of `mas.run()`, while agent-internal
-    crashes stay contained. This wrapper lets the instance tell the two
-    apart when draining agent tasks. Inherits from BaseException so it is
-    not caught by `except Exception` blocks inside pydantic-ai internals.
-    """
-
-    __slots__ = ("original",)
-
-    def __init__(self, original: BaseException):
-        super().__init__(str(original))
-        self.original = original
-
-
 class AgentState(StrEnum):
     IDLE = "idle"
     PROCESSING = "processing"
@@ -169,7 +153,14 @@ class AgentNode[DepsT]:
         return FunctionToolset[DepsT]([self._make_send_message_tool()])
 
     async def run_loop(self) -> None:
-        """Main processing loop. Runs until cancelled."""
+        """Main processing loop. Runs until cancelled.
+
+        Each message popped from the inbox is matched by exactly one
+        `router.mark_consumed()` call — including when `_process_message`
+        raises — so the supervisor's outstanding counter never leaks.
+        Non-cancellation exceptions propagate so the supervisor surfaces
+        them out of `mas.run()`.
+        """
         try:
             while True:
                 self.state = AgentState.IDLE
@@ -182,7 +173,10 @@ class AgentNode[DepsT]:
                 self.current_message = message
                 self.current_depth = message.depth
 
-                await self._process_message(message)
+                try:
+                    await self._process_message(message)
+                finally:
+                    self.router.mark_consumed()
         except asyncio.CancelledError:
             pass
         finally:
@@ -240,12 +234,9 @@ class AgentNode[DepsT]:
             depth=message.depth,
         )
 
-        try:
-            result = hook(ctx)
-            if inspect.isawaitable(result):
-                result = await result
-        except BaseException as exc:
-            raise _HookRaisedError(exc) from exc
+        result = hook(ctx)
+        if inspect.isawaitable(result):
+            result = await result
         return result
 
     async def _process_simple(self, formatted: str, message: Message) -> None:
@@ -322,5 +313,5 @@ class AgentNode[DepsT]:
                     in_reply_to=original_message.id,
                     depth=original_message.depth,
                 )
-            except Exception:
+            except BudgetExceededError:
                 pass  # budget exceeded during reply — silently drop

@@ -170,11 +170,12 @@ class TestMASInstanceTermination:
 
         assert result.termination_reason == TerminationReason.BUDGET_EXCEEDED
 
-    async def test_agent_crash_terminates_without_hanging(self):
-        """MAS terminates COMPLETED (not TIMEOUT) when an agent crashes mid-processing.
+    async def test_agent_crash_propagates_without_hanging(self):
+        """When an agent crashes, the exception propagates out of run().
 
-        Regression test: if run_loop doesn't re-set _idle_event on crash,
-        _monitor_termination hangs forever on the dead agent's idle_event.
+        Fail-fast contract: pydantic-mas does NOT contain agent-internal
+        crashes. The original exception reaches the library user unchanged,
+        and the run is torn down (no stall, no silent COMPLETED).
         """
 
         def crashing_handler(
@@ -188,12 +189,10 @@ class TestMASInstanceTermination:
         }
         instance = _make_instance(agents)
 
-        # timeout=2 is a safety net to prevent infinite hang. With the bug,
-        # the monitor waits on the dead agent's idle_event until timeout fires.
-        result = await instance.run(entry_agent="agent_a", prompt="go", timeout=2)
-
-        # With the fix, MAS detects quiescence immediately → COMPLETED, not TIMEOUT.
-        assert result.termination_reason == TerminationReason.COMPLETED
+        with pytest.raises(RuntimeError, match="Simulated LLM API failure"):
+            await asyncio.wait_for(
+                instance.run(entry_agent="agent_a", prompt="go"), timeout=2
+            )
 
 
 class TestMASInstanceResult:

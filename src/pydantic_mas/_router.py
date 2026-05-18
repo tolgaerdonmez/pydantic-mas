@@ -5,12 +5,22 @@ from pydantic_mas._message import Message, MessageType
 
 
 class MessageRouter:
-    """In-process message delivery layer. One per MASInstance."""
+    """In-process message delivery layer. One per MASInstance.
+
+    Owns an outstanding-message counter used for quiescence detection:
+    `route()` increments it (and clears `quiet`); `mark_consumed()` is
+    called by each AgentNode after a message has been fully processed
+    (success or crash). When the counter returns to zero, `quiet` is set
+    and the supervisor can terminate the run.
+    """
 
     def __init__(self, budget_tracker: BudgetTracker):
         self._budget_tracker = budget_tracker
         self._inboxes: dict[str, asyncio.Queue[Message]] = {}
         self._message_log: list[Message] = []
+        self._outstanding: int = 0
+        self._quiet: asyncio.Event = asyncio.Event()
+        self._quiet.set()
 
     def register(self, agent_id: str, inbox: asyncio.Queue[Message]) -> None:
         """Register an agent's inbox queue."""
@@ -59,8 +69,29 @@ class MessageRouter:
 
         self._message_log.append(message)
         self._inboxes[receiver].put_nowait(message)
+        self._outstanding += 1
+        self._quiet.clear()
 
         return message
+
+    def mark_consumed(self) -> None:
+        """Called by AgentNode after a message has been processed (or crashed).
+
+        Drops the outstanding counter and, if it reaches zero, signals
+        quiescence so the supervisor can shut down the run.
+        """
+        self._outstanding -= 1
+        if self._outstanding <= 0:
+            self._outstanding = 0
+            self._quiet.set()
+
+    async def wait_quiet(self) -> None:
+        """Block until the outstanding-message counter reaches zero."""
+        await self._quiet.wait()
+
+    @property
+    def outstanding(self) -> int:
+        return self._outstanding
 
     @property
     def message_log(self) -> list[Message]:
